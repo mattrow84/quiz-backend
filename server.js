@@ -5,36 +5,37 @@ const { Server } = require("socket.io");
 
 const app = express();
 
-// Permetti tutto (semplice). In produzione puoi restringere a un dominio.
+// Permetti tutto (semplice). In produzione puoi restringere all'URL del frontend.
 app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
 
 const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: "*", // es: "https://tuo-frontend.vercel.app"
     methods: ["GET", "POST"]
   }
 });
 
-// Stato globale (una sola stanza, 4 opzioni)
+// ---- Stato globale ----
 let currentQuestion = null;
 let currentOptions = { A: "", B: "", C: "", D: "" };
 let answers = { A: 0, B: 0, C: 0, D: 0 };
+let votedSockets = new Set(); // limita a 1 voto per socket
 
-// Nuova connessione
 io.on("connection", (socket) => {
   console.log("Socket connesso:", socket.id);
 
-  // Manda stato corrente
+  // Invia stato corrente
   socket.emit("question", {
     question: currentQuestion,
     options: currentOptions,
     answers
   });
 
-  // Admin invia nuova domanda
+  // Admin -> nuova domanda
   socket.on("newQuestion", (data) => {
+    console.log("Nuova domanda ricevuta:", data);
     currentQuestion = data?.question || "";
     currentOptions = {
       A: data?.options?.A || "",
@@ -43,6 +44,7 @@ io.on("connection", (socket) => {
       D: data?.options?.D || ""
     };
     answers = { A: 0, B: 0, C: 0, D: 0 };
+    votedSockets.clear(); // sblocco voti per nuova domanda
 
     io.emit("question", {
       question: currentQuestion,
@@ -51,9 +53,14 @@ io.on("connection", (socket) => {
     });
   });
 
-  // Utente vota
+  // Utente -> voto
   socket.on("answer", (opt) => {
+    if (votedSockets.has(socket.id)) {
+      socket.emit("alreadyVoted");
+      return;
+    }
     if (answers[opt] !== undefined) {
+      votedSockets.add(socket.id);
       answers[opt]++;
       io.emit("update", answers);
     }
@@ -64,12 +71,12 @@ io.on("connection", (socket) => {
   });
 });
 
-// Endpoint HTTP semplice (debug)
+// Endpoint HTTP semplice
 app.get("/", (req, res) => {
   res.send("Quiz backend attivo");
 });
 
-// Porta dinamica per Render + fallback locale
+// Porta (Render -> process.env.PORT)
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Backend avviato sulla porta ${PORT}`);
